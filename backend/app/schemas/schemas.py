@@ -17,7 +17,14 @@ class CarOut(BaseModel):
     direction: str
     load: int
     capacity: int
+    floor_min: int
+    floor_max: int
     model_config = {"from_attributes": True}
+
+
+class CarRangeUpdate(BaseModel):
+    floor_min: int = Field(ge=1)
+    floor_max: int = Field(ge=1)
 
 
 class CallOut(BaseModel):

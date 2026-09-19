@@ -23,6 +23,9 @@ class ElevatorCar(Base):
     direction: Mapped[str] = mapped_column(String(10), default="idle")
     load: Mapped[int] = mapped_column(Integer, default=0)
     capacity: Mapped[int] = mapped_column(Integer, default=10)
+    # 服务区间：只停靠 [floor_min, floor_max] 内的楼层
+    floor_min: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    floor_max: Mapped[int] = mapped_column(Integer, default=1000, server_default="1000")
     building: Mapped[Building] = relationship(back_populates="cars")
 
 
