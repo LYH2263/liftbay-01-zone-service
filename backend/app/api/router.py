@@ -9,11 +9,18 @@ from app.schemas.schemas import (
     CallCreate,
     CallOut,
     CarOut,
+    CarRangeUpdate,
     CongestionFloor,
     DispatchRequest,
     LogOut,
 )
-from app.services.dispatch_engine import CallRequest, CarState, congestion_by_floor, pick_car
+from app.services.dispatch_engine import (
+    CallRequest,
+    CarState,
+    congestion_by_floor,
+    covering_car_ids,
+    pick_car,
+)
 
 api_router = APIRouter()
 
@@ -31,6 +38,23 @@ def buildings(db: Session = Depends(get_db)):
 @api_router.get("/cars", response_model=list[CarOut])
 def cars(db: Session = Depends(get_db)):
     return db.scalars(select(ElevatorCar).order_by(ElevatorCar.id)).all()
+
+
+@api_router.patch("/cars/{car_id}", response_model=CarOut)
+def update_car_range(car_id: int, body: CarRangeUpdate, db: Session = Depends(get_db)):
+    car = db.get(ElevatorCar, car_id)
+    if not car:
+        raise HTTPException(404, "轿厢不存在")
+    if body.min_floor > body.max_floor:
+        raise HTTPException(400, "区间下限不能大于上限")
+    building = db.get(Building, car.building_id)
+    if building and body.max_floor > building.floors:
+        raise HTTPException(400, "区间超出楼栋楼层")
+    car.min_floor = body.min_floor
+    car.max_floor = body.max_floor
+    db.commit()
+    db.refresh(car)
+    return car
 
 
 @api_router.get("/calls", response_model=list[CallOut])
@@ -53,6 +77,28 @@ def create_call(body: CallCreate, db: Session = Depends(get_db)):
         direction=body.direction,
         passengers=body.passengers,
     )
+    car_rows = db.scalars(
+        select(ElevatorCar).where(ElevatorCar.building_id == body.building_id)
+    ).all()
+    car_states = [
+        CarState(c.id, c.floor, c.direction, c.load, c.capacity, c.min_floor, c.max_floor)
+        for c in car_rows
+    ]
+    if not covering_car_ids(car_states, body.floor):
+        # 本楼无任何轿厢覆盖该层：直接拒登并写回放，不留永远派不出去的 waiting
+        ticket.status = "rejected"
+        db.add(ticket)
+        db.flush()
+        db.add(
+            DispatchLog(
+                call_id=ticket.id,
+                car_id=None,
+                detail=f"本楼无轿厢覆盖 {body.floor} 层，拒绝登记",
+            )
+        )
+        db.commit()
+        db.refresh(ticket)
+        raise HTTPException(409, f"本楼无轿厢覆盖 {body.floor} 层，呼梯登记被拒绝")
     db.add(ticket)
     db.commit()
     db.refresh(ticket)
@@ -70,16 +116,21 @@ def dispatch(body: DispatchRequest, db: Session = Depends(get_db)):
         select(ElevatorCar).where(ElevatorCar.building_id == ticket.building_id)
     ).all()
     cars = [
-        CarState(c.id, c.floor, c.direction, c.load, c.capacity) for c in car_rows
+        CarState(c.id, c.floor, c.direction, c.load, c.capacity, c.min_floor, c.max_floor)
+        for c in car_rows
     ]
     call = CallRequest(ticket.id, ticket.floor, ticket.direction, ticket.passengers)
     best = pick_car(cars, call)
     if best is None:
-        db.add(DispatchLog(call_id=ticket.id, car_id=None, detail="全部轿厢满员，拒绝派工"))
+        if covering_car_ids(cars, ticket.floor):
+            detail = "覆盖该层的轿厢均满员，拒绝派工"
+        else:
+            detail = f"本楼无轿厢覆盖 {ticket.floor} 层，拒绝派工"
+        db.add(DispatchLog(call_id=ticket.id, car_id=None, detail=detail))
         ticket.status = "rejected"
         db.commit()
         db.refresh(ticket)
-        raise HTTPException(409, "无可用轿厢（满员）")
+        raise HTTPException(409, "无可用轿厢（满员或区间外）")
     car = db.get(ElevatorCar, best.car_id)
     assert car
     ticket.status = "assigned"

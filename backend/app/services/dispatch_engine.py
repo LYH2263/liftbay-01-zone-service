@@ -1,4 +1,4 @@
-"""Elevator dispatch: same-direction preference + floor distance; reject if car full."""
+"""Elevator dispatch: zone range gate first, then same-direction preference + floor distance; reject if car full."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ class CarState:
     direction: str  # "up" | "down" | "idle"
     load: int
     capacity: int
+    min_floor: int = 1
+    max_floor: int = 999
 
 
 @dataclass(frozen=True)
@@ -35,7 +37,19 @@ IDLE_BONUS = 20.0
 DISTANCE_WEIGHT = 5.0
 
 
+def covers_floor(car: CarState, floor: int) -> bool:
+    """轿厢服务区间 [min_floor, max_floor] 是否覆盖该层。"""
+    return car.min_floor <= floor <= car.max_floor
+
+
+def covering_car_ids(cars: list[CarState], floor: int) -> list[int]:
+    """覆盖该层的候选轿厢编号；为空表示本楼无任何轿厢可停该层。"""
+    return [c.car_id for c in cars if covers_floor(c, floor)]
+
+
 def score_car(car: CarState, call: CallRequest) -> ScoreResult:
+    if not covers_floor(car, call.floor):
+        return ScoreResult(car.car_id, -1e9, False, "楼层不在服务区间")
     if car.load + call.passengers > car.capacity:
         return ScoreResult(car.car_id, -1e9, False, "轿厢满员")
 

@@ -252,4 +252,5 @@ button {
 }
 .floor-slot.has-car { background: var(--car); color: white; border-color: #5eb3d8; font-weight: 700; }
 .floor-slot.has-call { box-shadow: inset 0 0 0 2px var(--call); }
+.floor-slot.out-of-zone { opacity: .28; background: #070d13; }
 .congestion-bar { height: 14px; background: var(--call); border-radius: 4px; }
